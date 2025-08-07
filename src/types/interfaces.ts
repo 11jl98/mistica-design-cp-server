@@ -4,6 +4,10 @@
  * Responsabilidade: Definir tipos comuns usados em todo o projeto
  */
 
+import type { FigmaAnalysis, EnhancedFigmaAnalysis } from "../analyzers/FigmaAnalyzer.js";
+import type { TypographyAnalysis } from "../analyzers/TypographyAnalyzer.js";
+import type { ColorMapping } from "../analyzers/SkinVarsAnalyzer.js";
+
 export interface MisticaComponent {
   name: string;
   category: string;

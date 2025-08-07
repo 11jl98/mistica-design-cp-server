@@ -5,6 +5,9 @@ import { ComponentMapper } from "../mappers/ComponentMapper.js";
 import { RefactoringGenerator } from "../generators/RefactoringGenerator.js";
 import { SearchEngine } from "../search/SearchEngine.js";
 import type { MisticaComponent, Tool } from "../types/interfaces.js";
+import type { EnhancedFigmaAnalysis } from "../analyzers/FigmaAnalyzer.js";
+import type { TypographyAnalysis } from "../analyzers/TypographyAnalyzer.js";
+import type { ColorMapping } from "../analyzers/SkinVarsAnalyzer.js";
 
 const COMPONENT_CATEGORY_LABELS = {
   components: "UI Components",
@@ -179,98 +182,179 @@ export class MisticaTools {
     try {
       const analysis = this.figmaAnalyzer.analyzeFigmaCode(figmaCode);
       const allComponents = await this.misticaScraper.getAllComponents();
+      
+      // Convert enhanced elements to UIElements format for compatibility
+      const compatibleElements = this.convertToUIElements(analysis.elements);
+      
       const suggestions = await this.componentMapper.findMisticaEquivalents(
-        analysis.elements,
-        analysis.structure,
-        analysis.patterns,
+        compatibleElements,
+        this.convertToStructuralAnalysis(analysis.structure),
+        this.convertToUIPatterns(analysis.patterns),
         allComponents
       );
 
-      let response = `Análise do código Figma\n\n`;
+      let response = `Análise Avançada do Código Figma\n\n`;
 
-      response += `Elementos detectados:\n`;
-      if (analysis.elements.buttons.found) {
-        response += `- Botões: ${analysis.elements.buttons.count} (${
-          analysis.elements.buttons.hasActions ? "com ações" : "básicos"
-        })\n`;
-      }
-      if (analysis.elements.texts.found) {
-        response += `- Textos: ${
-          analysis.elements.texts.count
-        } (${analysis.elements.texts.hierarchy.join(", ")})\n`;
-      }
-      if (analysis.elements.lists.found) {
-        response += `- Listas: ${analysis.elements.lists.count} (${
-          analysis.elements.lists.hasNavigation ? "navegáveis" : "básicas"
-        })\n`;
-      }
-      if (analysis.elements.containers.found) {
-        response += `- Containers: ${analysis.elements.containers.count} (layout: ${analysis.structure.layoutType})\n`;
-      }
-      if (analysis.elements.icons.found) {
-        response += `- Ícones: ${analysis.elements.icons.count} (${
-          analysis.elements.icons.hasInteraction ? "interativos" : "decorativos"
-        })\n`;
-      }
-      if (analysis.elements.inputs.found) {
-        response += `- Inputs: ${
-          analysis.elements.inputs.count
-        } (tipos: ${analysis.elements.inputs.types.join(", ")})\n`;
-      }
-      if (analysis.elements.navigation.found) {
-        response += `- Navegação: detectada ${
-          analysis.elements.navigation.hasBackButton
-            ? "com botão voltar"
-            : "básica"
-        }\n`;
-      }
-      response += "\n";
+      // Typography Analysis
+      if (analysis.elements.texts.found && analysis.elements.texts.typography.length > 0) {
+        response += `📝 Análise de Tipografia:\n`;
+        analysis.elements.texts.typography.forEach((typo, index) => {
+          response += `  ${index + 1}. Text Level: ${typo.textLevel} (${typo.weight})\n`;
+          response += `     Tamanho: ${typo.size}px, Line Height: ${typo.lineHeight}\n`;
+          response += `     Confiança: ${Math.round(typo.confidence * 100)}%\n`;
+          if (typo.color) {
+            response += `     Cor: ${typo.color}\n`;
+          }
+        });
+        response += "\n";
 
-      const detectedPatterns = [];
-      if (analysis.patterns.listPattern) detectedPatterns.push("Lista");
-      if (analysis.patterns.cardPattern) detectedPatterns.push("Card");
-      if (analysis.patterns.formPattern) detectedPatterns.push("Formulário");
-      if (analysis.patterns.navigationPattern)
-        detectedPatterns.push("Navegação");
-      if (analysis.patterns.modalPattern) detectedPatterns.push("Modal");
-
-      if (detectedPatterns.length > 0) {
-        response += `Padrões visuais detectados:\n`;
-        detectedPatterns.forEach((pattern) => {
-          response += `- ${pattern}\n`;
+        response += `🎨 Hierarquia de Texto Detectada:\n`;
+        analysis.elements.texts.hierarchy.forEach((hierarchy, index) => {
+          response += `  ${index + 1}. ${hierarchy}\n`;
         });
         response += "\n";
       }
 
+      // SkinVars Suggestions
+      if (analysis.designTokens.colors.length > 0) {
+        response += `🎨 Sugestões de SkinVars para Cores:\n`;
+        const uniqueColorMappings = analysis.designTokens.colors
+          .filter((mapping, index, self) => 
+            index === self.findIndex(m => m.figmaColor === mapping.figmaColor && m.skinVar === mapping.skinVar)
+          )
+          .sort((a, b) => b.confidence - a.confidence);
+
+        uniqueColorMappings.slice(0, 5).forEach((mapping, index) => {
+          response += `  ${index + 1}. ${mapping.figmaColor} → ${mapping.skinVar}\n`;
+          response += `     Categoria: ${mapping.category} (${Math.round(mapping.confidence * 100)}% confiança)\n`;
+        });
+        response += "\n";
+      }
+
+      // Component Suggestions (existing logic)
       if (suggestions.length > 0) {
-        response += `Componentes Mística sugeridos:\n`;
+        response += `🧩 Componentes Mística Sugeridos:\n`;
         suggestions.forEach((suggestion, index) => {
-          response += `${index + 1}. ${suggestion.component.name} (${
-            suggestion.component.category
-          })\n`;
-          response += `   Descrição: ${suggestion.component.description}\n`;
+          response += `${index + 1}. ${suggestion.component.name} (${suggestion.component.category})\n`;
+          response += `   ${suggestion.component.description}\n`;
           response += `   Relevância: ${suggestion.reason}\n\n`;
         });
       }
 
-      if (includeRefactoring && suggestions.length > 0) {
-        response += `Sugestão de refatoração:\n`;
-        response += this.refactoringGenerator.generateGenericRefactoring(
-          analysis.elements,
-          analysis.structure,
-          analysis.patterns,
-          suggestions
-        );
+      // Enhanced Refactoring
+      if (includeRefactoring && (suggestions.length > 0 || analysis.designTokens.typography.length > 0)) {
+        response += `⚡ Sugestão de Refatoração Avançada:\n`;
+        response += this.generateEnhancedRefactoring(analysis, suggestions);
       }
 
       return {
         analysis: analysis,
         suggestions: suggestions.map((s) => s.component),
+        typography: analysis.designTokens.typography,
+        skinVars: analysis.designTokens.colors,
         message: response,
       };
     } catch (error: any) {
-      return { error: `Erro na análise: ${error.message}` };
+      return { error: `Erro na análise avançada: ${error.message}` };
     }
+  }
+
+  private convertToUIElements(elements: EnhancedFigmaAnalysis['elements']): any {
+    // Convert enhanced elements format to UIElements format for backward compatibility
+    return {
+      buttons: elements.buttons,
+      texts: {
+        found: elements.texts.found,
+        count: elements.texts.count,
+        hierarchy: elements.texts.hierarchy
+      },
+      lists: elements.lists,
+      containers: elements.containers,
+      icons: elements.icons,
+      inputs: elements.inputs,
+      navigation: elements.navigation,
+      // Add default values for required UIElements properties
+      images: { found: false, count: 0 },
+      layouts: { found: false, type: 'unknown' },
+      security: { found: false },
+      forms: { found: false, count: 0, types: [] },
+      spacing: { found: false },
+      feedback: { found: false, type: 'info' },
+      figmaComponents: { found: false, count: 0, types: [] }
+    };
+  }
+
+  private convertToStructuralAnalysis(structure: EnhancedFigmaAnalysis['structure']): any {
+    return {
+      hasNestedElements: true,
+      layoutType: structure.layoutType,
+      repetitiveElements: false,
+      interactionElements: [],
+      spacing: 'normal',
+      alignment: 'start'
+    };
+  }
+
+  private convertToUIPatterns(patterns: EnhancedFigmaAnalysis['patterns']): any {
+    return {
+      listPattern: patterns.listPattern,
+      cardPattern: patterns.cardPattern,
+      formPattern: patterns.formPattern,
+      navigationPattern: patterns.navigationPattern,
+      modalPattern: patterns.modalPattern,
+      tablePattern: false,
+      headerPattern: false,
+      footerPattern: false
+    };
+  }
+
+  private generateEnhancedRefactoring(analysis: EnhancedFigmaAnalysis, suggestions: any[]): string {
+    let refactoring = "```tsx\n";
+    refactoring += "import { Text2, skinVars } from '@telefonica/mistica';\n\n";
+    
+    refactoring += "// Exemplo de refatoração com tipografia e cores otimizadas\n";
+    refactoring += "const RefactoredComponent = () => {\n";
+    refactoring += "  return (\n";
+    refactoring += "    <div style={{ padding: 24 }}>\n";
+    
+    // Typography examples with proper Text2 usage
+    if (analysis.elements.texts.typography.length > 0) {
+      analysis.elements.texts.typography.forEach((typo, index) => {
+        if (index < 3) { // Limite a 3 exemplos para não ficar muito longo
+          // Find color suggestion for text
+          const colorSuggestion = analysis.designTokens.colors.find((c: ColorMapping) => 
+            c.category === 'text' && c.figmaColor === typo.color
+          );
+          
+          refactoring += `      <Text2\n`;
+          refactoring += `        as="${typo.textLevel}"\n`;
+          refactoring += `        weight="${typo.weight}"\n`;
+          
+          if (colorSuggestion) {
+            refactoring += `        color={${colorSuggestion.skinVar}}\n`;
+          }
+          
+          refactoring += `      >\n`;
+          refactoring += `        ${index === 0 ? 'Título' : index === 1 ? 'Subtítulo' : 'Texto de corpo'}\n`;
+          refactoring += `      </Text2>\n`;
+          
+          if (index < analysis.elements.texts.typography.length - 1 && index < 2) {
+            refactoring += `\n`;
+          }
+        }
+      });
+    } else {
+      refactoring += `      <Text2 as="text6" weight="medium" color={skinVars.colors.textPrimary}>\n`;
+      refactoring += `        Exemplo de texto refatorado\n`;
+      refactoring += `      </Text2>\n`;
+    }
+    
+    refactoring += "    </div>\n";
+    refactoring += "  );\n";
+    refactoring += "};\n";
+    refactoring += "```\n";
+    
+    return refactoring;
   }
 
   getListComponentsTool(): Tool {
