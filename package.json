@@ -1,0 +1,44 @@
+{
+  "name": "mistica-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server para o design system Mística da Telefónica",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch & ts-node --esm src/index.ts",
+    "dev:build": "tsc --watch",
+    "dev:server": "ts-node --esm src/index.ts",
+    "lint": "tsc --noEmit",
+    "clean": "rimraf dist",
+    "clean-cache": "rimraf data/cache",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "npm run build",
+    "setup:install": "node setup.js install",
+    "setup:uninstall": "node setup.js uninstall",
+    "setup:status": "node setup.js status",
+    "setup:help": "node setup.js",
+    "test:scraper": "npm run build && node dist/utils/test-scraper.js",
+    "test:components": "npm run test:scraper",
+    "test:npm": "tsc && node dist/test-npm-analyzer.js",
+    "debug:cache": "npm run clean-cache && npm run test:scraper"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.1",
+    "@telefonica/mistica": "^16.35.0",
+    "@types/node": "^24.2.0",
+    "axios": "^1.11.0",
+    "cheerio": "^1.1.2",
+    "node-cache": "^5.1.2",
+    "ts-node": "^10.9.2",
+    "zod": "^3.25.76"
+  }
+}
