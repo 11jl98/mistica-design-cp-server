@@ -467,63 +467,57 @@ export class MisticaTools {
 
   async getUsageExamples(args: any) {
     try {
-      const { componentName } = args;
+      const { componentName, format = 'react', includeAdvanced = false } = args;
       const allComponents = await this.misticaScraper.getAllComponents();
-
       const component = allComponents.find(
-        (c) => c.name.toLowerCase() === componentName.toLowerCase()
+        (c) => c.name.toLowerCase() === String(componentName).toLowerCase()
       );
 
       if (!component) {
         return { error: `Componente "${componentName}" não encontrado` };
       }
 
-      let message = `Exemplos de uso: ${component.name}\n\n`;
-      message += `Descrição: ${component.description}\n\n`;
+      // Lazy import do gerador para evitar custo se não usado em outros fluxos
+      const { UsageExampleGenerator } = await import('../generators/UsageExampleGenerator.js');
+      const generator = new UsageExampleGenerator();
+      const enrichedMarkdown = generator.generate(component, { format, includeAdvanced });
 
-      if (component.examples && component.examples.length > 0) {
-        message += "Exemplos disponíveis:\n\n";
-        component.examples.forEach((example, index) => {
-          message += `### Exemplo ${index + 1}\n`;
-          message += "```tsx\n";
-          message += example.code || `<${component.name} />\n`;
-          message += "```\n\n";
-        });
-      } else {
-        message += "Exemplo básico:\n\n";
-        message += "```tsx\n";
-        message += `import { ${component.name} } from '@telefonica/mistica';\n\n`;
-        message += `<${component.name}`;
+      // Estrutura JSON auxiliar para consumo programático (props simplificados)
+      const props = (component.props || []).slice(0, 12).map((p: any) => ({
+        name: p.name,
+        type: p.type || p.tsType || p.kind,
+        required: !!p.required,
+        default: p.defaultValue?.value || p.default,
+        description: p.description || ''
+      }));
 
-        if (component.props && component.props.length > 0) {
-          const essentialProps = component.props.slice(0, 3);
-          essentialProps.forEach((prop) => {
-            message += `\n  ${prop.name}="${
-              prop.type === "string" ? "valor" : "true"
-            }"`;
-          });
-        }
-
-        message += `\n/>\n`;
-        message += "```\n\n";
-      }
-
-      if (component.props && component.props.length > 0) {
-        message += "Props principais:\n\n";
-        component.props.slice(0, 5).forEach((prop) => {
-          message += `- ${prop.name} (${prop.type}): ${
-            prop.description || "Propriedade do componente"
-          }\n`;
-        });
-      }
+      const variants = this.extractVariantNames(component);
 
       return {
         component: component.name,
-        message,
+        hasExamples: !!(component.examples && component.examples.length),
+        variants,
+        props,
+        message: enrichedMarkdown,
       };
     } catch (error: any) {
       return { error: `Erro ao obter exemplos: ${error.message}` };
     }
+  }
+
+  private extractVariantNames(component: any): string[] {
+    const variants = new Set<string>();
+    if (component.examples) {
+      component.examples.forEach((ex: any) => {
+        if (ex?.name) variants.add(ex.name);
+        if (ex?.title) variants.add(ex.title);
+      });
+    }
+    // Heurísticas por nome
+    const lower = component.name.toLowerCase();
+    if (/button/.test(lower)) ['primary','secondary','danger','link'].forEach(v => variants.add(v));
+    if (/field|pinfield/.test(lower)) ['default','error','disabled','withHelpText'].forEach(v => variants.add(v));
+    return Array.from(variants.values());
   }
 
   async getDesignTokens(args: any) {

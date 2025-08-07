@@ -30,6 +30,8 @@ export interface ElementMappings {
   icons: ElementMapping;
   inputs: ElementMapping;
   navigation: ElementMapping;
+  feedback: ElementMapping; // Nova categoria
+  figmaComponents: ElementMapping; // Componentes detectados do Figma
 }
 
 export class ComponentMapper {
@@ -177,6 +179,22 @@ export class ComponentMapper {
         misticaComponents: this.getNavigationComponents(elements.navigation),
         reason: this.getNavigationReason(elements.navigation),
         priority: 90
+      },
+
+      // Feedback (Telas de erro, sucesso, etc.)
+      feedback: {
+        detected: elements.feedback.found,
+        misticaComponents: this.getFeedbackComponents(elements.feedback),
+        reason: this.getFeedbackReason(elements.feedback),
+        priority: elements.feedback.hasScreen ? 100 : 80
+      },
+
+      // Componentes detectados do Figma
+      figmaComponents: {
+        detected: elements.figmaComponents.found,
+        misticaComponents: this.getFigmaComponents(elements.figmaComponents),
+        reason: this.getFigmaReason(elements.figmaComponents),
+        priority: 95
       }
     };
   }
@@ -574,6 +592,150 @@ export class ComponentMapper {
       return 'Para cabeçalho com ações e navegação';
     }
     return 'Para estrutura de navegação básica';
+  }
+
+  // ===== NOVOS MÉTODOS PARA FEEDBACK E FIGMA =====
+
+  private getFeedbackComponents(feedback: any): string[] {
+    const components = [];
+    
+    if (feedback.hasScreen) {
+      // Telas de feedback completas
+      switch (feedback.type) {
+        case 'error':
+          components.push('ErrorFeedbackScreen', 'ErrorFeedback');
+          break;
+        case 'success':
+          components.push('SuccessFeedbackScreen', 'SuccessFeedback');
+          break;
+        case 'info':
+          components.push('InfoFeedbackScreen', 'InfoFeedback');
+          break;
+        case 'warning':
+          components.push('WarningFeedbackScreen', 'WarningFeedback');
+          break;
+        default:
+          components.push('FeedbackScreen');
+      }
+    } else {
+      // Componentes de feedback menores
+      switch (feedback.type) {
+        case 'error':
+          components.push('ErrorFeedback', 'Callout', 'Snackbar');
+          break;
+        case 'success':
+          components.push('SuccessFeedback', 'Callout', 'Snackbar');
+          break;
+        case 'info':
+          components.push('InfoFeedback', 'Callout');
+          break;
+        case 'warning':
+          components.push('WarningFeedback', 'Callout');
+          break;
+        default:
+          components.push('Callout', 'Snackbar');
+      }
+    }
+
+    if (feedback.hasActions) {
+      components.push('Button');
+    }
+
+    if (feedback.hasIcon) {
+      components.push('Icon');
+    }
+
+    return [...new Set(components)];
+  }
+
+  private getFeedbackReason(feedback: any): string {
+    let reason = `Detectado feedback do tipo "${feedback.type}"`;
+    
+    if (feedback.hasScreen) {
+      reason += ' como tela completa';
+    }
+    
+    const features = [];
+    if (feedback.hasIcon) features.push('com ícone');
+    if (feedback.hasActions) features.push('com ações');
+    
+    if (features.length > 0) {
+      reason += ` ${features.join(' e ')}`;
+    }
+
+    if (feedback.detectedNames.length > 0) {
+      reason += `. Nomes: ${feedback.detectedNames.slice(0, 2).join(', ')}`;
+    }
+
+    return reason;
+  }
+
+  private getFigmaComponents(figmaComponents: any): string[] {
+    const components = [];
+    const componentCounts: Record<string, number> = {};
+
+    // Conta componentes por tipo
+    figmaComponents.detectedComponents.forEach((comp: any) => {
+      componentCounts[comp.componentType] = (componentCounts[comp.componentType] || 0) + 1;
+    });
+
+    // Mapeia tipos para componentes do Mística
+    for (const [type, count] of Object.entries(componentCounts)) {
+      switch (type) {
+        case 'feedback':
+          components.push('FeedbackScreen', 'ErrorFeedbackScreen', 'SuccessFeedbackScreen');
+          break;
+        case 'button':
+          components.push('Button');
+          break;
+        case 'card':
+          components.push('Card');
+          break;
+        case 'modal':
+          components.push('Modal', 'Sheet');
+          break;
+        case 'text':
+          components.push('Text', 'Title1', 'Title2', 'Title3');
+          break;
+        case 'navigation':
+          components.push('NavigationBar', 'Breadcrumbs');
+          break;
+        case 'input':
+          components.push('TextField', 'Input');
+          break;
+      }
+    }
+
+    // Adiciona componentes baseados em nomes específicos detectados
+    const detectedNames = figmaComponents.detectedComponents.map((c: any) => c.originalName.toLowerCase());
+    
+    if (detectedNames.some((name: string) => name.includes('home bar'))) {
+      components.push('NavigationBar');
+    }
+    
+    if (detectedNames.some((name: string) => name.includes('rodapé') || name.includes('footer'))) {
+      components.push('Box', 'Stack');
+    }
+
+    return [...new Set(components)];
+  }
+
+  private getFigmaReason(figmaComponents: any): string {
+    const totalComponents = figmaComponents.detectedComponents.length;
+    const highConfidenceComponents = figmaComponents.detectedComponents.filter((c: any) => c.confidenceScore > 0.7);
+    
+    let reason = `Detectados ${totalComponents} componentes do Figma`;
+    
+    if (highConfidenceComponents.length > 0) {
+      const topComponents = highConfidenceComponents
+        .slice(0, 3)
+        .map((c: any) => `"${c.originalName}"`)
+        .join(', ');
+      
+      reason += `. Principais: ${topComponents}`;
+    }
+
+    return reason;
   }
 
   // ===== MÉTODOS AUXILIARES =====

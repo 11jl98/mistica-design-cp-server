@@ -11,6 +11,30 @@ export interface UIElements {
   security: SecurityElements;
   forms: FormElements;
   spacing: SpacingElements;
+  feedback: FeedbackElements; // Nova categoria para feedback screens
+  figmaComponents: FigmaComponentElements; // Detecção geral de componentes do Figma
+}
+
+export interface FeedbackElements {
+  found: boolean;
+  type: string; // error, success, info, warning
+  hasScreen: boolean; // se é uma tela completa
+  hasIcon: boolean;
+  hasActions: boolean;
+  detectedNames: string[]; // nomes detectados do figma
+}
+
+export interface FigmaComponentElements {
+  found: boolean;
+  detectedComponents: DetectedFigmaComponent[];
+}
+
+export interface DetectedFigmaComponent {
+  originalName: string; // "Error Feedback Screen"
+  normalizedName: string; // "ErrorFeedbackScreen"
+  componentType: string; // "feedback", "button", "text", etc.
+  confidenceScore: number;
+  variations: string[]; // variações possíveis
 }
 
 export interface ButtonElements {
@@ -26,6 +50,15 @@ export interface TextElements {
   count: number;
   hasFormatting: boolean;
   hierarchy: string[];
+  figmaPresets: FigmaTextPreset[];
+}
+
+export interface FigmaTextPreset {
+  preset: string; // text1, text2, text3, etc.
+  variant: string; // regular, medium, bold, light
+  originalName: string; // text-preset-3/regular
+  fontSizeGuess?: number; // tamanho da fonte estimado
+  confidenceScore: number; // 0-1, confiança na detecção
 }
 
 export interface ContainerElements {
@@ -121,6 +154,8 @@ export class ElementExtractor {
       security: this.extractSecurity(code),
       forms: this.extractForms(code),
       spacing: this.extractSpacing(code),
+      feedback: this.extractFeedback(code),
+      figmaComponents: this.extractFigmaComponents(code),
     };
   }
 
@@ -147,13 +182,16 @@ export class ElementExtractor {
       /<h[1-6][\s\S]*?>/gi,
       /<p[\s\S]*?>/gi,
       /Title\d*|Heading|Typography/gi,
+      /text-preset-\d+\/\w+/gi, // Padrões do Figma
+      /text-preset-\d+-\w+/gi,  // Variação com hífen
     ];
 
     return {
       found: patterns.some((p) => p.test(code)),
-      count: (code.match(/Text|title|heading|h\d|p>/gi) || []).length,
-      hasFormatting: /bold|italic|font-size|color|weight/gi.test(code),
+      count: (code.match(/Text|title|heading|h\d|p>|text-preset-\d+/gi) || []).length,
+      hasFormatting: /bold|italic|font-size|color|weight|\/regular|\/medium|\/bold|\/light/gi.test(code),
       hierarchy: this.detectTextHierarchy(code),
+      figmaPresets: this.extractFigmaTextPresets(code),
     };
   }
 
@@ -224,12 +262,213 @@ export class ElementExtractor {
 
   private detectTextHierarchy(code: string): string[] {
     const hierarchy = [];
-    if (/h1|title.*1|Title1|heading.*1/gi.test(code)) hierarchy.push("h1");
-    if (/h2|title.*2|Title2|heading.*2/gi.test(code)) hierarchy.push("h2");
-    if (/h3|title.*3|Title3|heading.*3/gi.test(code)) hierarchy.push("h3");
+    
+    // Detecta padrões do Figma (text-preset-X/variant)
+    if (/text-preset-1\/|text-preset-1-|title.*1|Title1|heading.*1/gi.test(code)) hierarchy.push("text1");
+    if (/text-preset-2\/|text-preset-2-|title.*2|Title2|heading.*2/gi.test(code)) hierarchy.push("text2");
+    if (/text-preset-3\/|text-preset-3-|title.*3|Title3|heading.*3/gi.test(code)) hierarchy.push("text3");
+    if (/text-preset-4\/|text-preset-4-|title.*4|Title4|heading.*4/gi.test(code)) hierarchy.push("text4");
+    if (/text-preset-5\/|text-preset-5-|title.*5|Title5|heading.*5/gi.test(code)) hierarchy.push("text5");
+    if (/text-preset-6\/|text-preset-6-|title.*6|Title6|heading.*6/gi.test(code)) hierarchy.push("text6");
+    
+    // Detecta variações de peso/estilo
+    if (/\/regular|text.*regular|-regular/gi.test(code)) hierarchy.push("regular");
+    if (/\/medium|text.*medium|-medium/gi.test(code)) hierarchy.push("medium");
+    if (/\/bold|text.*bold|-bold/gi.test(code)) hierarchy.push("bold");
+    if (/\/light|text.*light|-light/gi.test(code)) hierarchy.push("light");
+    
+    // Detecta padrões HTML tradicionais
+    if (/h1|title.*1/gi.test(code)) hierarchy.push("h1");
+    if (/h2|title.*2/gi.test(code)) hierarchy.push("h2");
+    if (/h3|title.*3/gi.test(code)) hierarchy.push("h3");
     if (/subtitle|Subtitle/gi.test(code)) hierarchy.push("subtitle");
     if (/body|Body|paragraph|p>/gi.test(code)) hierarchy.push("body");
+    
     return hierarchy;
+  }
+
+  /**
+   * Extrai presets de texto do Figma baseado em múltiplas estratégias:
+   * 1. Nomes explícitos (text-preset-3/regular)
+   * 2. Propriedades CSS (font-size, font-weight, line-height)
+   * 3. Contexto semântico (títulos, subtítulos, etc.)
+   */
+  private extractFigmaTextPresets(code: string): FigmaTextPreset[] {
+    const presets: FigmaTextPreset[] = [];
+    
+    // Estratégia 1: Detecção por nome explícito
+    presets.push(...this.detectPresetsByName(code));
+    
+    // Estratégia 2: Detecção por propriedades CSS
+    presets.push(...this.detectPresetsByCSSProperties(code));
+    
+    // Estratégia 3: Detecção por contexto semântico
+    presets.push(...this.detectPresetsBySemanticContext(code));
+    
+    // Remove duplicatas e ordena por confiança
+    return this.consolidatePresets(presets);
+  }
+
+  private detectPresetsByName(code: string): FigmaTextPreset[] {
+    const presets: FigmaTextPreset[] = [];
+    
+    // Padrão: text-preset-3/regular ou text-preset-3-regular
+    const figmaPattern = /text-preset-(\d+)([\/\-])(\w+)/gi;
+    let match;
+    
+    while ((match = figmaPattern.exec(code)) !== null) {
+      const presetNumber = match[1];
+      const variant = match[3];
+      const originalName = match[0];
+      
+      presets.push({
+        preset: `text${presetNumber}`,
+        variant: variant,
+        originalName: originalName,
+        confidenceScore: 1.0, // Máxima confiança para nomes explícitos
+      });
+    }
+    
+    return presets;
+  }
+
+  private detectPresetsByCSSProperties(code: string): FigmaTextPreset[] {
+    const presets: FigmaTextPreset[] = [];
+    
+    // Mapeamento baseado no design system Mística (valores típicos)
+    const textPresetMapping = [
+      { preset: 'text1', minFontSize: 28, maxFontSize: 40, weights: ['400', '500', '600', '700'] },
+      { preset: 'text2', minFontSize: 20, maxFontSize: 28, weights: ['400', '500', '600'] },
+      { preset: 'text3', minFontSize: 16, maxFontSize: 20, weights: ['400', '500', '600'] },
+      { preset: 'text4', minFontSize: 14, maxFontSize: 16, weights: ['400', '500'] },
+      { preset: 'text5', minFontSize: 12, maxFontSize: 14, weights: ['400', '500'] },
+      { preset: 'text6', minFontSize: 10, maxFontSize: 12, weights: ['400'] },
+    ];
+
+    // Extrai valores de font-size do código (CSS e JSX)
+    const fontSizePatterns = [
+      /font-size:\s*(\d+)px/gi,                    // CSS: font-size: 16px
+      /fontSize:\s*['"]?(\d+)px['"]?/gi,           // JSX: fontSize="16px"
+      /fontSize:\s*\{(\d+)\}/gi,                   // JSX: fontSize={16}
+      /fontSize=\{(\d+)\}/gi,                      // JSX: fontSize={16}
+      /text-(\d+)|size-(\d+)/gi,                   // Classes: text-16, size-14
+    ];
+
+    const fontWeightPatterns = [
+      /font-weight:\s*(\d+)/gi,                    // CSS: font-weight: 500
+      /fontWeight:\s*['"]?(\d+)['"]?/gi,           // JSX: fontWeight="500"
+      /fontWeight:\s*['"]?(normal|bold|medium|light)['"]?/gi,  // JSX: fontWeight="medium"
+      /fontWeight=\{['"]?(\w+)['"]?\}/gi,          // JSX: fontWeight={"medium"}
+    ];
+    
+    const detectedFonts: Array<{fontSize: number, weight?: string}> = [];
+    
+    // Processa todos os padrões de font-size
+    fontSizePatterns.forEach(pattern => {
+      let fontMatch;
+      while ((fontMatch = pattern.exec(code)) !== null) {
+        const fontSize = parseInt(fontMatch[1] || fontMatch[2]);
+        if (fontSize && fontSize > 0) {
+          detectedFonts.push({ fontSize });
+        }
+      }
+    });
+
+    // Processa font-weight se disponível
+    fontWeightPatterns.forEach(pattern => {
+      let weightMatch;
+      while ((weightMatch = pattern.exec(code)) !== null) {
+        const weight = weightMatch[1] || weightMatch[2];
+        if (weight && detectedFonts.length > 0) {
+          detectedFonts[detectedFonts.length - 1].weight = weight;
+        }
+      }
+    });
+
+    // Mapeia tamanhos de fonte para presets
+    detectedFonts.forEach(font => {
+      const matchingPreset = textPresetMapping.find(preset => 
+        font.fontSize >= preset.minFontSize && font.fontSize <= preset.maxFontSize
+      );
+      
+      if (matchingPreset) {
+        const variant = this.guessVariantFromWeight(font.weight);
+        presets.push({
+          preset: matchingPreset.preset,
+          variant: variant,
+          originalName: `Detectado por CSS: ${font.fontSize}px${font.weight ? `, peso: ${font.weight}` : ''}`,
+          fontSizeGuess: font.fontSize,
+          confidenceScore: 0.7, // Boa confiança para detecção por CSS
+        });
+      }
+    });
+    
+    return presets;
+  }
+
+  private detectPresetsBySemanticContext(code: string): FigmaTextPreset[] {
+    const presets: FigmaTextPreset[] = [];
+    
+    // Analisa o contexto semântico dos textos
+    const semanticRules = [
+      { pattern: /<h1[\s\S]*?>|<title[\s\S]*?>|class.*title.*main/gi, preset: 'text1', confidence: 0.6 },
+      { pattern: /<h2[\s\S]*?>|class.*subtitle|class.*heading-2/gi, preset: 'text2', confidence: 0.6 },
+      { pattern: /<h3[\s\S]*?>|class.*heading-3|class.*section-title/gi, preset: 'text3', confidence: 0.5 },
+      { pattern: /<p[\s\S]*?>|class.*body|class.*paragraph/gi, preset: 'text4', confidence: 0.4 },
+      { pattern: /class.*caption|class.*small|class.*footnote/gi, preset: 'text5', confidence: 0.4 },
+    ];
+
+    semanticRules.forEach(rule => {
+      if (rule.pattern.test(code)) {
+        presets.push({
+          preset: rule.preset,
+          variant: 'regular',
+          originalName: `Detectado por contexto semântico`,
+          confidenceScore: rule.confidence,
+        });
+      }
+    });
+    
+    return presets;
+  }
+
+  private guessVariantFromWeight(weight?: string): string {
+    if (!weight) return 'regular';
+    
+    const weightMap: Record<string, string> = {
+      '300': 'light',
+      '400': 'regular',
+      '500': 'medium',
+      '600': 'medium',
+      '700': 'bold',
+      '800': 'bold',
+      '900': 'bold',
+      'normal': 'regular',
+      'bold': 'bold',
+      'medium': 'medium',
+      'light': 'light',
+    };
+    
+    return weightMap[weight] || 'regular';
+  }
+
+  private consolidatePresets(presets: FigmaTextPreset[]): FigmaTextPreset[] {
+    // Remove duplicatas baseado na combinação preset + variant
+    const uniqueMap = new Map<string, FigmaTextPreset>();
+    
+    presets.forEach(preset => {
+      const key = `${preset.preset}-${preset.variant}`;
+      const existing = uniqueMap.get(key);
+      
+      // Mantém o preset com maior confiança
+      if (!existing || preset.confidenceScore > existing.confidenceScore) {
+        uniqueMap.set(key, preset);
+      }
+    });
+    
+    // Retorna ordenado por confiança (maior primeiro)
+    return Array.from(uniqueMap.values())
+      .sort((a, b) => b.confidenceScore - a.confidenceScore);
   }
 
   private detectContainerTypes(code: string): string[] {
@@ -508,5 +747,186 @@ export class ElementExtractor {
       detectedUnits: [...new Set(detectedUnits)],
       semanticSpacing: [...new Set(semanticSpacing)],
     };
+  }
+
+  /**
+   * Detecta elementos de feedback (Error Screen, Success Screen, etc.)
+   */
+  private extractFeedback(code: string): FeedbackElements {
+    const feedbackPatterns = [
+      /error.*feedback.*screen|feedback.*error.*screen|error.*screen/gi,
+      /success.*feedback.*screen|feedback.*success.*screen|success.*screen/gi,
+      /info.*feedback.*screen|feedback.*info.*screen|info.*screen/gi,
+      /warning.*feedback.*screen|feedback.*warning.*screen|warning.*screen/gi,
+      /feedback.*screen|screen.*feedback/gi,
+    ];
+
+    const detectedNames = [];
+    let feedbackType = "generic";
+    
+    // Detecta nomes específicos do Figma
+    const figmaNames = this.extractFigmaComponentNames(code);
+    const feedbackNames = figmaNames.filter(name => 
+      /feedback|screen|error|success|info|warning/gi.test(name)
+    );
+    
+    detectedNames.push(...feedbackNames);
+
+    // Determina o tipo específico
+    if (/error/gi.test(code)) feedbackType = "error";
+    else if (/success/gi.test(code)) feedbackType = "success";
+    else if (/info/gi.test(code)) feedbackType = "info";
+    else if (/warning/gi.test(code)) feedbackType = "warning";
+
+    const found = feedbackPatterns.some(pattern => pattern.test(code)) || feedbackNames.length > 0;
+    const hasScreen = /screen/gi.test(code);
+    const hasIcon = /icon|image.*error|image.*success|image.*info|image.*warning/gi.test(code);
+    const hasActions = /button|action|retry|close|dismiss|ok/gi.test(code);
+
+    return {
+      found,
+      type: feedbackType,
+      hasScreen,
+      hasIcon,
+      hasActions,
+      detectedNames,
+    };
+  }
+
+  /**
+   * Detecta componentes gerais do Figma com análise inteligente de nomes
+   */
+  private extractFigmaComponents(code: string): FigmaComponentElements {
+    const detectedComponents: DetectedFigmaComponent[] = [];
+    
+    // Extrai nomes de componentes do código
+    const componentNames = this.extractFigmaComponentNames(code);
+    
+    componentNames.forEach(originalName => {
+      const analysis = this.analyzeFigmaComponentName(originalName);
+      if (analysis) {
+        detectedComponents.push(analysis);
+      }
+    });
+
+    return {
+      found: detectedComponents.length > 0,
+      detectedComponents,
+    };
+  }
+
+  /**
+   * Extrai nomes de componentes de diferentes formatos do Figma
+   */
+  private extractFigmaComponentNames(code: string): string[] {
+    const names: string[] = [];
+    
+    // Padrões para detectar nomes de componentes do Figma
+    const patterns = [
+      // data-name="Component Name"
+      /data-name=["']([^"']+)["']/gi,
+      // className contendo nomes de componentes
+      /className=["']([^"']*(?:Screen|Feedback|Button|Card|Modal)[^"']*)["']/gi,
+      // id contendo nomes de componentes  
+      /id=["']([^"']*(?:Screen|Feedback|Button|Card|Modal)[^"']*)["']/gi,
+      // Comentários do Figma
+      /\/\*\s*([^*]*(?:Screen|Feedback|Button|Card|Modal)[^*]*)\s*\*\//gi,
+      // Nomes em camelCase ou PascalCase
+      /\b([A-Z][a-z]*(?:Screen|Feedback|Button|Card|Modal)[A-Z]?[a-z]*)\b/gi,
+    ];
+
+    patterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(code)) !== null) {
+        const name = match[1]?.trim();
+        if (name && name.length > 2) {
+          names.push(name);
+        }
+      }
+    });
+
+    // Remove duplicatas
+    return [...new Set(names)];
+  }
+
+  /**
+   * Analisa um nome de componente do Figma e determina seu tipo
+   */
+  private analyzeFigmaComponentName(originalName: string): DetectedFigmaComponent | null {
+    const normalizedName = this.normalizeComponentName(originalName);
+    const variations = this.generateNameVariations(originalName);
+    
+    // Mapeamento de tipos baseado em padrões
+    const typePatterns = [
+      { pattern: /feedback.*screen|screen.*feedback|error.*screen|success.*screen/gi, type: 'feedback', confidence: 0.9 },
+      { pattern: /button|btn/gi, type: 'button', confidence: 0.8 },
+      { pattern: /card/gi, type: 'card', confidence: 0.7 },
+      { pattern: /modal|dialog/gi, type: 'modal', confidence: 0.8 },
+      { pattern: /text|title|heading/gi, type: 'text', confidence: 0.6 },
+      { pattern: /navigation|nav|header/gi, type: 'navigation', confidence: 0.7 },
+      { pattern: /input|field|form/gi, type: 'input', confidence: 0.7 },
+    ];
+
+    let componentType = 'unknown';
+    let confidenceScore = 0.3;
+
+    for (const typePattern of typePatterns) {
+      if (typePattern.pattern.test(originalName)) {
+        componentType = typePattern.type;
+        confidenceScore = typePattern.confidence;
+        break;
+      }
+    }
+
+    if (componentType === 'unknown' && originalName.length < 3) {
+      return null; // Ignora nomes muito curtos sem tipo identificado
+    }
+
+    return {
+      originalName,
+      normalizedName,
+      componentType,
+      confidenceScore,
+      variations,
+    };
+  }
+
+  /**
+   * Normaliza nome do componente para formato padrão
+   */
+  private normalizeComponentName(name: string): string {
+    return name
+      .replace(/[\s-_]+/g, '') // Remove espaços, hífens, underscores
+      .replace(/([a-z])([A-Z])/g, '$1$2') // Mantém camelCase
+      .replace(/^./, str => str.toUpperCase()); // Primeira letra maiúscula
+  }
+
+  /**
+   * Gera variações possíveis do nome do componente
+   */
+  private generateNameVariations(originalName: string): string[] {
+    const variations: string[] = [originalName];
+    
+    // Variação sem espaços
+    const noSpaces = originalName.replace(/\s+/g, '');
+    if (noSpaces !== originalName) variations.push(noSpaces);
+    
+    // Variação camelCase
+    const camelCase = originalName.replace(/\s+(.)/g, (_, char) => char.toUpperCase());
+    if (camelCase !== originalName) variations.push(camelCase);
+    
+    // Variação PascalCase
+    const pascalCase = originalName.replace(/(?:^|\s+)(.)/g, (_, char) => char.toUpperCase()).replace(/\s+/g, '');
+    if (pascalCase !== originalName) variations.push(pascalCase);
+    
+    // Variação kebab-case
+    const kebabCase = originalName.toLowerCase().replace(/\s+/g, '-');
+    if (kebabCase !== originalName) variations.push(kebabCase);
+    
+    // Variação snake_case
+    const snakeCase = originalName.toLowerCase().replace(/\s+/g, '_');
+    if (snakeCase !== originalName) variations.push(snakeCase);
+    
+    return [...new Set(variations)];
   }
 }
